@@ -74,11 +74,14 @@ class LogStash::Outputs::File < LogStash::Outputs::Base
   # 0 or negative values results in no rotation files
   config :rotate, :validate => :number, :default => 0
   
-  # when the filesize exceeds the specified amount of bytes, a file rotation 
+  # When the filesize exceeds the specified amount of megabytes, a file rotation 
   # is triggered on the next write attempt.
-  # negative or zero disables file rotation
+  # Negative or zero disables file rotation
   config :rotate_size, :validate => :number, :default => -1
   
+  # Specify a time period in hours for a file rotation 
+  # Negative or zero disables time based file rotation
+  config :rotate_time, :validate => :number, :default => -1
 
   default :codec, "json_lines"
 
@@ -106,6 +109,7 @@ class LogStash::Outputs::File < LogStash::Outputs::Base
     @last_stale_cleanup_cycle = now
     @flush_interval = @flush_interval.to_i
     @stale_cleanup_interval = 10
+	@timestamp = now
 
     if @message_format
      @codec = LogStash::Plugin.lookup("codec", "line").new
@@ -169,32 +173,43 @@ class LogStash::Outputs::File < LogStash::Outputs::Base
       file_output_path = @failure_path
     end
 	
-	if rotate_size > 0 && rotate > 0
-		rotate_files(file_output_path)
+	if(@rotate >0 && File.exists?(file_output_path))
+		try_rotate(file_output_path)
 	end
 	
     @logger.debug("File, writing event to file.", :filename => file_output_path)
     fd = open(file_output_path)
 
 	# TODO(sissel): Check if we should rotate the file.
-    fd.write(data)
+    fd.write((@timestamp + @rotate_time*1000))
+	fd.write("<")
+	fd.write(Time.now())
+	fd.write(data)
     flush(fd)
   end
-
+  
+  private
+  def try_rotate(path)
+  		if @rotate_size > 0 && (File.size(path)/1000000.0) > @rotate_size 
+			rotate_files(path)
+		elsif @rotate_time > 0 && (@timestamp + @rotate_time) < Time.now()
+			rotate_files(path)
+		end
+  end
+  
   private 
   def rotate_files(path)
-    if File.exists?(path) && File.size(path) > rotate_size
-		close()
-		i = rotate
-		while i > 0
-			i-=1
-			if File.exist?(path+".#{i}")
-				File.rename(path+".#{i}", path+".#{i+1}")
-			end
+	@timestamp = Time.now()
+	close()
+	i = @rotate
+	while i > 0
+		i-=1
+		if File.exist?(path+".#{i}")
+			File.rename(path+".#{i}", path+".#{i+1}")
 		end
-		File.rename(path, path+".#{i+1}")
-		logger.info("File: filesize exceeded maximum, rotated files.")
 	end
+	File.rename(path, path+".#{i+1}")
+	logger.info("File: filesize exceeded maximum, rotated files.")
   end
   
   private
